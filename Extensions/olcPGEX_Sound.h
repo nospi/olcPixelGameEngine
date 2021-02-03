@@ -64,12 +64,17 @@
 
 	Author
 	~~~~~~
-	David Barr, aka javidx9, ©OneLoneCoder 2019
+	David Barr, aka javidx9, Â©OneLoneCoder 2019
 */
 
 
 #ifndef OLC_PGEX_SOUND_H
 #define OLC_PGEX_SOUND_H
+
+#ifndef sample
+#define sample double
+//typedef double sample;
+#endif
 
 #include <istream>
 #include <cstring>
@@ -134,7 +139,7 @@ namespace olc
 
 		public:
 			OLC_WAVEFORMATEX wavHeader;
-			float *fSample = nullptr;
+			sample *dSample = nullptr;
 			long nSamples = 0;
 			int nChannels = 0;
 			bool bSampleValid = false;
@@ -154,15 +159,16 @@ namespace olc
 	public:
 		static bool InitialiseAudio(unsigned int nSampleRate = 44100, unsigned int nChannels = 1, unsigned int nBlocks = 8, unsigned int nBlockSamples = 512);
 		static bool DestroyAudio();
-		static void SetUserSynthFunction(std::function<float(int, float, float)> func);
-		static void SetUserFilterFunction(std::function<float(int, float, float)> func);
+		static void SetUserSynthFunction(std::function<sample(int, double, double)> func);
+		static void SetUserFilterFunction(std::function<sample(int, double, sample)> func);
 
 	public:
 		static int LoadAudioSample(std::string sWavFile, olc::ResourcePack *pack = nullptr);
 		static void PlaySample(int id, bool bLoop = false);
 		static void StopSample(int id);
 		static void StopAll();
-		static float GetMixerOutput(int nChannel, float fGlobalTime, float fTimeStep);
+		static sample GetMixerOutput(int nChannel, double dGlobalTime, double dTimeStep);
+		static double GetTime();
 
 
 	private:
@@ -205,9 +211,9 @@ namespace olc
 		static void AudioThread();
 		static std::thread m_AudioThread;
 		static std::atomic<bool> m_bAudioThreadActive;
-		static std::atomic<float> m_fGlobalTime;
-		static std::function<float(int, float, float)> funcUserSynth;
-		static std::function<float(int, float, float)> funcUserFilter;
+		static std::atomic<double> m_dGlobalTime;
+		static std::function<sample(int, double, double)> funcUserSynth;
+		static std::function<sample(int, double, sample)> funcUserFilter;
 	};
 }
 
@@ -268,8 +274,8 @@ namespace olc
 			nChannels = wavHeader.nChannels;
 
 			// Create floating point buffer to hold audio sample
-			fSample = new float[nSamples * nChannels];
-			float *pSample = fSample;
+			dSample = new sample[nSamples * nChannels];
+			sample *pSample = dSample;
 
 			// Read in audio data and normalise
 			for (long i = 0; i < nSamples; i++)
@@ -281,7 +287,7 @@ namespace olc
 					{
 						is.read((char*)&s, sizeof(short));
 
-						*pSample = (float)s / (float)(SHRT_MAX);
+						*pSample = (sample)s / (sample)(SHRT_MAX);
 						pSample++;
 					}
 				}
@@ -318,12 +324,12 @@ namespace olc
 	// holds the sound ID and where this instance of it is up to for its
 	// current playback
 
-	void SOUND::SetUserSynthFunction(std::function<float(int, float, float)> func)
+	void SOUND::SetUserSynthFunction(std::function<sample(int, double, double)> func)
 	{
 		funcUserSynth = func;
 	}
 
-	void SOUND::SetUserFilterFunction(std::function<float(int, float, float)> func)
+	void SOUND::SetUserFilterFunction(std::function<sample(int, double, sample)> func)
 	{
 		funcUserFilter = func;
 	}
@@ -371,10 +377,10 @@ namespace olc
 		}
 	}
 
-	float SOUND::GetMixerOutput(int nChannel, float fGlobalTime, float fTimeStep)
+	sample SOUND::GetMixerOutput(int nChannel, double dGlobalTime, double dTimeStep)
 	{
 		// Accumulate sample for this channel
-		float fMixerSample = 0.0f;
+		sample dMixerSample = 0.0;
 
 		for (auto &s : listActiveSamples)
 		{
@@ -388,11 +394,11 @@ namespace olc
 				else
 				{
 					// Calculate sample position
-					s.nSamplePosition += roundf((float)vecAudioSamples[s.nAudioSampleID - 1].wavHeader.nSamplesPerSec * fTimeStep);
+					s.nSamplePosition += roundf((sample)vecAudioSamples[s.nAudioSampleID - 1].wavHeader.nSamplesPerSec * dTimeStep);
 
 					// If sample position is valid add to the mix
 					if (s.nSamplePosition < vecAudioSamples[s.nAudioSampleID - 1].nSamples)
-						fMixerSample += vecAudioSamples[s.nAudioSampleID - 1].fSample[(s.nSamplePosition * vecAudioSamples[s.nAudioSampleID - 1].nChannels) + nChannel];
+						dMixerSample += vecAudioSamples[s.nAudioSampleID - 1].dSample[(s.nSamplePosition * vecAudioSamples[s.nAudioSampleID - 1].nChannels) + nChannel];
 					else
 					{
 						if (s.bLoop)
@@ -405,7 +411,7 @@ namespace olc
 				}
 			}
 			else
-				return 0.0f;
+				return 0.0;
 		}
 
 		// If sounds have completed then remove them
@@ -413,21 +419,26 @@ namespace olc
 
 		// The users application might be generating sound, so grab that if it exists
 		if (funcUserSynth != nullptr)
-			fMixerSample += funcUserSynth(nChannel, fGlobalTime, fTimeStep);
+			dMixerSample += funcUserSynth(nChannel, dGlobalTime, dTimeStep);
 
 		// Return the sample via an optional user override to filter the sound
 		if (funcUserFilter != nullptr)
-			return funcUserFilter(nChannel, fGlobalTime, fMixerSample);
+			return funcUserFilter(nChannel, dGlobalTime, dMixerSample);
 		else
-			return fMixerSample;
+			return dMixerSample;
+	}
+
+	double olc::SOUND::GetTime()
+	{
+		return m_dGlobalTime;
 	}
 
 	std::thread SOUND::m_AudioThread;
 	std::atomic<bool> SOUND::m_bAudioThreadActive{ false };
-	std::atomic<float> SOUND::m_fGlobalTime{ 0.0f };
+	std::atomic<double> SOUND::m_dGlobalTime{ 0.0 };
 	std::list<SOUND::sCurrentlyPlayingSample> SOUND::listActiveSamples;
-	std::function<float(int, float, float)> SOUND::funcUserSynth = nullptr;
-	std::function<float(int, float, float)> SOUND::funcUserFilter = nullptr;
+	std::function<sample(int, double, double)> SOUND::funcUserSynth = nullptr;
+	std::function<sample(int, double, sample)> SOUND::funcUserFilter = nullptr;
 }
 
 // Implementation, Windows-specific
@@ -516,16 +527,16 @@ namespace olc
 	// and then issued to the soundcard.
 	void SOUND::AudioThread()
 	{
-		m_fGlobalTime = 0.0f;
-		static float fTimeStep = 1.0f / (float)m_nSampleRate;
+		m_dGlobalTime = 0.0;
+		static double dTimeStep = 1.0 / (double)m_nSampleRate;
 
 		// Goofy hack to get maximum integer for a type at run-time
 		short nMaxSample = (short)pow(2, (sizeof(short) * 8) - 1) - 1;
-		float fMaxSample = (float)nMaxSample;
+		sample dMaxSample = (sample)nMaxSample;
 		short nPreviousSample = 0;
 
-		auto tp1 = std::chrono::system_clock::now();
-		auto tp2 = std::chrono::system_clock::now();
+		auto tp1 = std::chrono::steady_clock::now();
+		auto tp2 = std::chrono::steady_clock::now();
 
 		while (m_bAudioThreadActive)
 		{
@@ -547,33 +558,33 @@ namespace olc
 			short nNewSample = 0;
 			int nCurrentBlock = m_nBlockCurrent * m_nBlockSamples;
 
-			auto clip = [](float fSample, float fMax)
+			auto clip = [](sample dSample, sample dMax)
 			{
-				if (fSample >= 0.0)
-					return fmin(fSample, fMax);
+				if (dSample >= 0.0)
+					return fmin(dSample, dMax);
 				else
-					return fmax(fSample, -fMax);
+					return fmax(dSample, -dMax);
 			};
 
-			tp2 = std::chrono::system_clock::now();
-			std::chrono::duration<float> elapsedTime = tp2 - tp1;
+			tp2 = std::chrono::steady_clock::now();
+			std::chrono::duration<double> elapsedTime = tp2 - tp1;
 			tp1 = tp2;
 
 			// Our time per frame coefficient
-			float fElapsedTime = elapsedTime.count();
+			double dElapsedTime = elapsedTime.count();
 
 			for (unsigned int n = 0; n < m_nBlockSamples; n += m_nChannels)
 			{
 				// User Process
 				for (unsigned int c = 0; c < m_nChannels; c++)
 				{
-					nNewSample = (short)(clip(GetMixerOutput(c, m_fGlobalTime + fTimeStep * (float)n, fTimeStep), 1.0) * fMaxSample);
+					nNewSample = (short)(clip(GetMixerOutput(c, m_dGlobalTime + dTimeStep * (double)n, dTimeStep), 1.0) * dMaxSample);
 					m_pBlockMemory[nCurrentBlock + n + c] = nNewSample;
 					nPreviousSample = nNewSample;
 				}				
 			}
 
-			m_fGlobalTime = m_fGlobalTime + fTimeStep * (float)m_nBlockSamples;
+			m_dGlobalTime = m_dGlobalTime + dTimeStep * (double)m_nBlockSamples;
 
 			// Send block to sound device
 			waveOutPrepareHeader(m_hwDevice, &m_pWaveHeaders[m_nBlockCurrent], sizeof(WAVEHDR));
@@ -671,24 +682,24 @@ namespace olc
 	// and then issued to the soundcard.
 	void SOUND::AudioThread()
 	{
-		m_fGlobalTime = 0.0f;
-		static float fTimeStep = 1.0f / (float)m_nSampleRate;
+		m_dGlobalTime = 0.0;
+		static float dTimeStep = 1.0 / (double)m_nSampleRate;
 
 		// Goofy hack to get maximum integer for a type at run-time
 		short nMaxSample = (short)pow(2, (sizeof(short) * 8) - 1) - 1;
-		float fMaxSample = (float)nMaxSample;
+		sample dMaxSample = (sample)nMaxSample;
 		short nPreviousSample = 0;
 
 		while (m_bAudioThreadActive)
 		{
 			short nNewSample = 0;
 
-			auto clip = [](float fSample, float fMax)
+			auto clip = [](sample dSample, sample dMax)
 			{
-				if (fSample >= 0.0)
-					return fmin(fSample, fMax);
+				if (dSample >= 0.0)
+					return fmin(dSample, dMax);
 				else
-					return fmax(fSample, -fMax);
+					return fmax(dSample, -dMax);
 			};
 
 			for (unsigned int n = 0; n < m_nBlockSamples; n += m_nChannels)
@@ -696,13 +707,13 @@ namespace olc
 				// User Process
 				for (unsigned int c = 0; c < m_nChannels; c++)
 				{
-					nNewSample = (short)(GetMixerOutput(c, m_fGlobalTime + fTimeStep * (float)n, fTimeStep), 1.0) * fMaxSample;
+					nNewSample = (short)(GetMixerOutput(c, m_dGlobalTime + dTimeStep * (double)n, dTimeStep), 1.0) * dMaxSample;
 					m_pBlockMemory[n + c] = nNewSample;
 					nPreviousSample = nNewSample;
 				}		
 			}
 
-			m_fGlobalTime = m_fGlobalTime + fTimeStep * (float)m_nBlockSamples;
+			m_dGlobalTime = m_dGlobalTime + dTimeStep * (double)m_nBlockSamples;
 
 			// Send block to sound device
 			snd_pcm_uframes_t nLeft = m_nBlockSamples;
@@ -799,12 +810,12 @@ namespace olc
 	// and then issued to the soundcard.
 	void SOUND::AudioThread()
 	{
-		m_fGlobalTime = 0.0f;
-		static float fTimeStep = 1.0f / (float)m_nSampleRate;
+		m_dGlobalTime = 0.0;
+		static double dTimeStep = 1.0 / (double)m_nSampleRate;
 
 		// Goofy hack to get maximum integer for a type at run-time
 		short nMaxSample = (short)pow(2, (sizeof(short) * 8) - 1) - 1;
-		float fMaxSample = (float)nMaxSample;
+		sample dMaxSample = (sample)nMaxSample;
 		short nPreviousSample = 0;
 
 		std::vector<ALuint> vProcessed;
@@ -825,12 +836,12 @@ namespace olc
 
 			short nNewSample = 0;
 
-			auto clip = [](float fSample, float fMax)
+			auto clip = [](sample dSample, sample dMax)
 			{
-				if (fSample >= 0.0)
-					return fmin(fSample, fMax);
+				if (dSample >= 0.0)
+					return fmin(dSample, dMax);
 				else
-					return fmax(fSample, -fMax);
+					return fmax(dSample, -dMax);
 			};
 
 			for (unsigned int n = 0; n < m_nBlockSamples; n += m_nChannels)
@@ -838,12 +849,12 @@ namespace olc
 				// User Process
 				for (unsigned int c = 0; c < m_nChannels; c++)
 				{
-					nNewSample = (short)(clip(GetMixerOutput(c, m_fGlobalTime, fTimeStep), 1.0) * fMaxSample);
+					nNewSample = (short)(clip(GetMixerOutput(c, m_dGlobalTime, dTimeStep), 1.0) * dMaxSample);
 					m_pBlockMemory[n + c] = nNewSample;
 					nPreviousSample = nNewSample;
 				}
 
-				m_fGlobalTime = m_fGlobalTime + fTimeStep;
+				m_dGlobalTime = m_dGlobalTime + dTimeStep;
 			}
 
 			// Fill OpenAL data buffer
